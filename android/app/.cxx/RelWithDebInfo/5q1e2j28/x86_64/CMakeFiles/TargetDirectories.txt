@@ -1,0 +1,2 @@
+C:/Users/known/StudioProjects/AdBoard2/android/app/.cxx/RelWithDebInfo/5q1e2j28/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/known/StudioProjects/AdBoard2/android/app/.cxx/RelWithDebInfo/5q1e2j28/x86_64/CMakeFiles/rebuild_cache.dir
