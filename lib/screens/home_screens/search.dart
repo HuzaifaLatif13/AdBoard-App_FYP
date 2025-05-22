@@ -30,7 +30,29 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
 
   // Predefined lists for filters
   final List<String> categories = ['Billboards', 'Transit', 'In-Store'];
-  final List<String> sizes = ['Small', 'Medium', 'Large', 'Custom'];
+  final List<String> sizes = ['Small', 'Medium', 'Large'];
+
+  String getSizeCategory(String dimensions) {
+    try {
+      // Extract numbers from dimensions string (e.g., "10x5" -> [10, 5])
+      final numbers = dimensions.split('x').map((e) => double.parse(e.trim())).toList();
+      if (numbers.length != 2) return 'Medium'; // Default to Medium if format is invalid
+      
+      final width = numbers[0];
+      final height = numbers[1];
+      final area = width * height;
+
+      if (area <= 50) { // 10x5 = 50
+        return 'Small';
+      } else if (area <= 200) { // 16x8 = 128, 12x6 = 72, 18x4 = 72, 10x6 = 60
+        return 'Medium';
+      } else { // 40x20 = 800
+        return 'Large';
+      }
+    } catch (e) {
+      return 'Medium'; // Default to Medium if parsing fails
+    }
+  }
 
   @override
   void initState() {
@@ -66,7 +88,9 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
 
         // Location filter
         bool matchesLocation = currentFilters.location == null ||
-            ad.location.toLowerCase() == currentFilters.location!.toLowerCase();
+            ad.location
+                .toLowerCase()
+                .contains(currentFilters.location!.toLowerCase());
 
         // Price range filter
         bool matchesPrice = true;
@@ -90,8 +114,8 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
             ad.availability == currentFilters.isAvailable;
 
         // Size filter
-        bool matchesSize =
-            currentFilters.size == null || ad.size == currentFilters.size;
+        bool matchesSize = currentFilters.size == null ||
+            getSizeCategory(ad.size) == currentFilters.size;
 
         // Date range filter
         bool matchesDateRange = true;
@@ -186,60 +210,92 @@ class _SearchResultsScreenState extends State<SearchResultsScreen> {
         children: [
           Container(
             color: Colors.white,
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Search for ads...',
-                      prefixIcon: const Icon(Icons.search, color: Colors.black),
-                      filled: true,
-                      fillColor: Colors.grey[100],
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8.0),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                    onChanged: updateSearchResults,
-                    textInputAction: TextInputAction.search,
+            padding: const EdgeInsets.fromLTRB(16.0, 24.0, 16.0, 16.0),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16.0),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    spreadRadius: 1,
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
                   ),
+                ],
+                border: Border.all(
+                  color: Colors.black.withOpacity(0.1),
+                  width: 1.5,
                 ),
-                IconButton(
-                  icon: Stack(
-                    children: [
-                      const Icon(Icons.filter_list_outlined,
-                          color: Colors.black),
-                      if (currentFilters.hasActiveFilters())
-                        Positioned(
-                          right: 0,
-                          top: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.red,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 12,
-                              minHeight: 12,
-                            ),
-                            child: const Text(
-                              '!',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText: 'Search for ads...',
+                        hintStyle: TextStyle(color: Colors.grey[500], fontSize: 16),
+                        prefixIcon: const Icon(Icons.search, color: Colors.black87, size: 26),
+                        filled: true,
+                        fillColor: Colors.grey[50],
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16.0),
+                          borderSide: BorderSide.none,
                         ),
-                    ],
+                        contentPadding: const EdgeInsets.symmetric(vertical: 18.0),
+                      ),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                      onChanged: updateSearchResults,
+                      textInputAction: TextInputAction.search,
+                    ),
                   ),
-                  onPressed: _showFilterDialog,
-                ),
-              ],
+                  Container(
+                    margin: const EdgeInsets.only(left: 8.0, right: 8.0),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(12.0),
+                    ),
+                    child: IconButton(
+                      icon: Stack(
+                        children: [
+                          const Icon(Icons.filter_list_outlined,
+                              color: Colors.black87, size: 26),
+                          if (currentFilters.hasActiveFilters())
+                            Positioned(
+                              right: 0,
+                              top: 0,
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: BoxDecoration(
+                                  color: Colors.black,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                constraints: const BoxConstraints(
+                                  minWidth: 12,
+                                  minHeight: 12,
+                                ),
+                                child: const Text(
+                                  '!',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 8,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      onPressed: _showFilterDialog,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           Padding(

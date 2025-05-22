@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 class PaymentScreen extends StatefulWidget {
-  const PaymentScreen({Key? key}) : super(key: key);
+
+  const PaymentScreen({super.key});
 
   @override
   State<PaymentScreen> createState() => _PaymentScreenState();
@@ -25,9 +26,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
     setState(() => _isLoading = true);
     try {
       // For testing, use dummy data
-      _pendingPayments = _paymentService.getDummyPendingPayments();
+      // _pendingPayments = _paymentService.getDummyPendingPayments();
       // In production, use this:
-      // _pendingPayments = await _paymentService.getPendingPayments();
+      _pendingPayments = await _paymentService.getPendingPayments();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error loading payments: $e')),
@@ -39,31 +40,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Future<void> _processPayment(PaymentModel payment) async {
     try {
-      // Show payment form dialog
-      final result = await showDialog<Map<String, String>>(
-        context: context,
-        builder: (context) => PaymentFormDialog(amount: payment.amount),
+      final success = await _paymentService.processPayment(
+        amount: payment.amount,
+        payment: payment,
       );
 
-      if (result != null) {
-        final success = await _paymentService.processPayment(
-          accountNumber: result['accountNumber']!,
-          email: result['email']!,
-          amount: payment.amount,
-          paymentId: payment.id,
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payment processed successfully!')),
         );
-
-        if (success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Payment processed successfully!')),
-          );
-          _loadPendingPayments();
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Payment processing failed. Please try again.')),
-          );
-        }
+        _loadPendingPayments();
+      } else {
+        _loadPendingPayments();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Payment processing failed. Please try again.')),
+        );
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -93,9 +85,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   itemCount: _pendingPayments.length,
                   itemBuilder: (context, index) {
                     final payment = _pendingPayments[index];
+                    print('Payment: ${payment.id}');
                     return PaymentCard(
                       payment: payment,
-                      onPayNow: () => _processPayment(payment),
+                      onPayNow: () async => await _processPayment(payment),
                     );
                   },
                 ),
@@ -103,19 +96,39 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 }
 
-class PaymentCard extends StatelessWidget {
+class PaymentCard extends StatefulWidget {
   final PaymentModel payment;
-  final VoidCallback onPayNow;
+  final Future<void> Function() onPayNow;
 
   const PaymentCard({
-    Key? key,
+    super.key,
     required this.payment,
     required this.onPayNow,
-  }) : super(key: key);
+  });
+
+  @override
+  State<PaymentCard> createState() => _PaymentCardState();
+}
+
+class _PaymentCardState extends State<PaymentCard> {
+  bool _isProcessing = false;
+
+  Future<void> _handlePayment() async {
+    if (_isProcessing) return;
+    
+    setState(() => _isProcessing = true);
+    try {
+      await widget.onPayNow();
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final daysLeft = payment.dueDate.difference(DateTime.now()).inDays;
+    final daysLeft = widget.payment.dueDate.difference(DateTime.now()).inDays;
     final isUrgent = daysLeft <= 2;
 
     return Card(
@@ -129,7 +142,7 @@ class PaymentCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Amount: Rs. ${payment.amount.toStringAsFixed(2)}',
+                  'Amount: Rs. ${widget.payment.amount.toStringAsFixed(2)}',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -156,21 +169,30 @@ class PaymentCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Due Date: ${DateFormat('MMM dd, yyyy').format(payment.dueDate)}',
+              'Due Date: ${DateFormat('MMM dd, yyyy').format(widget.payment.dueDate)}',
               style: const TextStyle(color: Colors.grey),
             ),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: onPayNow,
+                onPressed: _isProcessing ? null : _handlePayment,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                child: const Text(
-                  'Pay Now',
-                  style: TextStyle(fontSize: 16),
-                ),
+                child: _isProcessing
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text(
+                        'Pay Now',
+                        style: TextStyle(fontSize: 16),
+                      ),
               ),
             ),
           ],
@@ -184,9 +206,9 @@ class PaymentFormDialog extends StatefulWidget {
   final double amount;
 
   const PaymentFormDialog({
-    Key? key,
+    super.key,
     required this.amount,
-  }) : super(key: key);
+  });
 
   @override
   State<PaymentFormDialog> createState() => _PaymentFormDialogState();

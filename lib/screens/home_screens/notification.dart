@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:adboard/services/payment_service.dart';
 import 'package:adboard/screens/payment_screens/payment_screen.dart';
+import 'package:shimmer/shimmer.dart';
 
 class NotificationScreen extends StatefulWidget {
   final String userId; // Current logged-in owner's ID
@@ -94,24 +95,24 @@ class _NotificationScreenState extends State<NotificationScreen> {
         throw 'Booking not found';
       }
 
-      // Update the status
-      await bookingDoc.reference.update({'status': status});
-
-      // If the status is "Approved", handle payment setup
-      if (status == 'Approved') {
+      if (status == 'Approved' || status == 'Pending Payment') {
         // Create payment record
+        print('adid: ${bookingData['adId']}, advertiserUserId: ${bookingData['adOwnerId']}, amount: ${bookingData['totalAmount']}');
         final payment = await _paymentService.createPayment(
           adId: bookingData['adId'],
-          advertiserUserId: bookingData['adOwnerId'],
-          amount: double.parse(bookingData['amount']?.toString() ?? '0'),
+          advertiserUserId: bookingData['userId'],
+          amount: double.parse(bookingData['totalAmount']?.toString() ?? '0'),
         );
+
+        //update booking status to Pending Payment
+        bookingDoc.reference.update({'status': 'Pending Payment'});
 
         // Create payment notification for the user
         await FirebaseFirestore.instance.collection('notifications').add({
           'userId': bookingData['userId'],
           'title': 'Payment Required',
           'message':
-          'Your booking has been approved. Please complete the payment within 7 days to confirm your booking.',
+          'Your booking request has been accepted. Please complete the payment within 7 days to confirm your booking.',
           'type': 'payment',
           'paymentId': payment.id,
           'timestamp': DateTime.now().toIso8601String(),
@@ -132,8 +133,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
         // Start payment expiry check
         PaymentService.startExpiryCheck();
-      } else {
-        // For other status updates (like Rejected), update ad availability
+      } else if (status == 'Rejected') {
+        // For rejected status, update ad availability
         await FirebaseFirestore.instance
             .collection('ads')
             .doc(bookingData['adOwnerId'])
@@ -145,13 +146,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
           'bookingId': null, // Clear bookingId reference
         });
       }
-
       // Create a status update notification for the booker
       await FirebaseFirestore.instance.collection('notifications').add({
         'userId': bookingData['userId'],
-        'title': 'Booking Status Update',
+        'title': 'Booking Request Update',
         'message':
-        'Your booking for ${bookingData['adTitle']} has been $status.',
+        'Your booking request for ${bookingData['adTitle']} has been $status.',
         'type': 'booking_status',
         'timestamp': DateTime.now().toIso8601String(),
         'read': false,
@@ -164,51 +164,208 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   void showBookingDetailsDialog(
       BuildContext context, Map<String, dynamic> booking) {
+    bool isAccepting = false;
+    bool isRejecting = false;
+    
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text('Booking Request for ${booking['adTitle']}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Requested by: ${booking['userName']}'),
-              const SizedBox(height: 8.0),
-              Text('Email: ${booking['userEmail']}'),
-              const SizedBox(height: 8.0),
-              Text('Duration: ${booking['durationDays']} days'),
-              const SizedBox(height: 8.0),
-              Text('Special Instructions: ${booking['specialInstructions']}'),
-              if (booking['adDesignUrl'] != null)
-                Column(
-                  children: [
-                    const SizedBox(height: 16.0),
-                    const Text('Ad Design:'),
-                    const SizedBox(height: 8.0),
-                    Image.network(booking['adDesignUrl'], height: 100),
-                  ],
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Booking Request for ${booking['adTitle']}',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Requested by: ${booking['userName']}'),
+                  const SizedBox(height: 8.0),
+                  Text('Email: ${booking['userEmail']}'),
+                  const SizedBox(height: 8.0),
+                  Text('Duration: ${booking['durationDays']} days'),
+                  const SizedBox(height: 8.0),
+                  Text('Special Instructions: ${booking['specialInstructions']}'),
+                          if (booking['adDesignUrl'] != null) ...[
+                        const SizedBox(height: 16.0),
+                        const Text('Ad Design:'),
+                        const SizedBox(height: 8.0),
+                            FutureBuilder<void>(
+                              future: precacheImage(
+                                NetworkImage(booking['adDesignUrl']),
+                                context,
+                              ),
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState == ConnectionState.waiting) {
+                                  return Shimmer.fromColors(
+                                    baseColor: Colors.grey[300]!,
+                                    highlightColor: Colors.grey[100]!,
+                                    child: Container(
+                                      height: 100,
+                                      width: double.infinity,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                
+                                if (snapshot.hasError) {
+                                  return Container(
+                                    height: 100,
+                                    width: double.infinity,
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[200],
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Center(
+                                      child: Icon(
+                                        Icons.error_outline,
+                                        color: Colors.red,
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return Image.network(
+                                  booking['adDesignUrl'],
+                                  height: 100,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return Container(
+                                      height: 100,
+                                      width: double.infinity,
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey[200],
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Center(
+                                        child: Icon(
+                                          Icons.error_outline,
+                                          color: Colors.red,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                  onPressed: (isAccepting || isRejecting)
+                      ? null
+                      : () async {
+                          setState(() => isRejecting = true);
+                          try {
+                            await updateBookingStatus(booking['id'], 'Rejected');
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                              this.setState(() {}); // Refresh screen
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error: $e')),
+                              );
+                            }
+                          } finally {
+                            if (context.mounted) {
+                              setState(() => isRejecting = false);
+                            }
+                          }
+                        },
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                  child: isRejecting
+                      ? const SizedBox(
+                                      height: 20,
+                          width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.red),
+                                      ),
+                        )
+                      : const Text('Reject', style: TextStyle(color: Colors.red)),
                 ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                await updateBookingStatus(booking['id'], 'Rejected');
-                Navigator.of(context).pop();
-                setState(() {}); // Refresh screen
-              },
-              child: const Text('Reject', style: TextStyle(color: Colors.red)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                await updateBookingStatus(booking['id'], 'Approved');
-                Navigator.of(context).pop();
-                setState(() {}); // Refresh screen
-              },
-              child: const Text('Accept'),
-            ),
-          ],
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: ElevatedButton(
+                  onPressed: (isAccepting || isRejecting)
+                      ? null
+                      : () async {
+                          setState(() => isAccepting = true);
+                          try {
+                            await updateBookingStatus(booking['id'], 'Pending Payment');
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                              this.setState(() {}); // Refresh screen
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Error: $e')),
+                              );
+                            }
+                          } finally {
+                            if (context.mounted) {
+                              setState(() => isAccepting = false);
+                            }
+                          }
+                        },
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                  child: isAccepting
+                      ? const SizedBox(
+                                      height: 20,
+                          width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      ),
+                        )
+                      : const Text('Accept'),
+                            ),
+                          ),
+                        ],
+                ),
+              ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -307,15 +464,17 @@ class _NotificationScreenState extends State<NotificationScreen> {
                           ? Colors.orange
                           : booking['status'] == 'Approved'
                           ? Colors.green
+                          : booking['status'] == 'Pending Payment'
+                          ? Colors.blue
                           : Colors.red,
                     ),
                   ),
                   onTap: () {
-                    if (booking['role'] == 'Owner') {
+                    if (booking['role'] == 'Owner' && booking['status'] != 'Approved') {
                       showBookingDetailsDialog(context, booking);
                     } else {
                       // Handle payment notifications
-                      if (booking['status'] == 'Approved') {
+                      if (booking['status'] == 'Pending Payment') {
                         Navigator.push(
                           context,
                           MaterialPageRoute(

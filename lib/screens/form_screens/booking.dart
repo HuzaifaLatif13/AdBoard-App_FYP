@@ -81,7 +81,7 @@ class _BookAdScreenState extends State<BookAdScreen> {
 
   Future<void> _sendBookingRequest() async {
     fetchUserInfo();
-    if (_formKey.currentState!.validate()) {
+    if (_formKey.currentState!.validate() && _adDesign != null) {
       setState(() {
         isLoading = true;
       });
@@ -90,6 +90,11 @@ class _BookAdScreenState extends State<BookAdScreen> {
         // Fetch current user
         final currentUser = FirebaseAuth.instance.currentUser;
         if (currentUser == null) throw Exception('User not logged in');
+
+        // Calculate total amount
+        final int durationDays = int.parse(_durationController.text);
+        final double dailyPrice = double.parse(widget.ad.price.replaceAll(RegExp(r'[^0-9.]'), ''));
+        final double totalAmount = dailyPrice * durationDays;
 
         // Generate a unique booking ID
         final bookingId =
@@ -122,10 +127,24 @@ class _BookAdScreenState extends State<BookAdScreen> {
           'userEmail': userEmail,
           'userContact': userContact,
           'durationDays': _durationController.text,
+          'dailyPrice': dailyPrice,
+          'totalAmount': totalAmount,
+          'aboutAd': _aboutAdController.text,
           'specialInstructions': _specialInstructionsController.text,
           'adDesignUrl': adDesignUrl,
           'bookingTimestamp': DateTime.now().toIso8601String(),
           'status': 'Pending',
+        });
+
+
+        //create a notification
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'userId': widget.ad.userId,
+          'title': 'New Booking Request',
+          'message': 'You have a new booking request for ${widget.ad.title}',
+          'type': 'booking_request',
+          'timestamp': DateTime.now().toIso8601String(),
+          'read': false,
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -143,6 +162,134 @@ class _BookAdScreenState extends State<BookAdScreen> {
         });
       }
     }
+  }
+
+  void showBookingDetailsDialog(BuildContext context, Map<String, dynamic> booking) {
+    bool isProcessing = false;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Booking Details'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Ad Title: ${booking['adTitle']}'),
+                Text('User Name: ${booking['userName']}'),
+                Text('User Email: ${booking['userEmail']}'),
+                Text('User Contact: ${booking['userContact']}'),
+                Text('Duration: ${booking['durationDays']} days'),
+                Text('Total Amount: \$${booking['totalAmount']}'),
+                Text('About Ad: ${booking['aboutAd']}'),
+                if (booking['specialInstructions']?.isNotEmpty ?? false)
+                  Text('Special Instructions: ${booking['specialInstructions']}'),
+                if (booking['adDesignUrl'] != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Image.network(
+                      booking['adDesignUrl'],
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            if (booking['status'] == 'Pending') ...[
+              TextButton(
+                onPressed: isProcessing
+                    ? null
+                    : () async {
+                        setState(() => isProcessing = true);
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('booking')
+                              .doc(booking['adOwnerId'])
+                              .collection('user-book-ads')
+                              .doc(booking['bookingId'])
+                              .update({'status': 'Rejected'});
+                          if (context.mounted) {
+                            Navigator.of(context).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Booking rejected successfully')),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('Error rejecting booking: $e')),
+                            );
+                          }
+                        } finally {
+                          if (context.mounted) {
+                            setState(() => isProcessing = false);
+                          }
+                        }
+                      },
+                child: isProcessing
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Reject'),
+              ),
+              ElevatedButton(
+                onPressed: isProcessing
+                    ? null
+                    : () async {
+                        setState(() => isProcessing = true);
+                        try {
+                          await FirebaseFirestore.instance
+                              .collection('booking')
+                              .doc(booking['adOwnerId'])
+                              .collection('user-book-ads')
+                              .doc(booking['bookingId'])
+                              .update({'status': 'Accepted'});
+                          if (context.mounted) {
+                            Navigator.of(context).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Booking accepted successfully')),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('Error accepting booking: $e')),
+                            );
+                          }
+                        } finally {
+                          if (context.mounted) {
+                            setState(() => isProcessing = false);
+                          }
+                        }
+                      },
+                child: isProcessing
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Accept'),
+              ),
+            ] else
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -271,7 +418,7 @@ class _BookAdScreenState extends State<BookAdScreen> {
 
                   // Upload Ad Design Section
                   const Text(
-                    'Ad Design Upload',
+                    'Ad Design Upload *',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8.0),
@@ -281,16 +428,21 @@ class _BookAdScreenState extends State<BookAdScreen> {
                       height: 150,
                       width: double.infinity,
                       decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey),
+                        border: Border.all(color: _adDesign == null ? Colors.red : Colors.grey),
                         borderRadius: BorderRadius.circular(8.0),
                         color: Colors.grey[100],
                       ),
                       child: _adDesign == null
-                          ? const Center(
-                              child: Text(
-                                'Tap to upload Ad Design',
-                                style: TextStyle(color: Colors.blueGrey),
-                              ),
+                          ? const Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.upload_file, color: Colors.blueGrey),
+                                SizedBox(height: 8),
+                                Text(
+                                  'Tap to upload Ad Design (Required)',
+                                  style: TextStyle(color: Colors.blueGrey),
+                                ),
+                              ],
                             )
                           : Image.file(
                               File(_adDesign!.path),
@@ -298,6 +450,14 @@ class _BookAdScreenState extends State<BookAdScreen> {
                             ),
                     ),
                   ),
+                  if (_adDesign == null && _formKey.currentState?.validate() == true)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        'Please upload an ad design',
+                        style: TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    ),
                   const SizedBox(height: 24.0),
 
                   // Duration Section

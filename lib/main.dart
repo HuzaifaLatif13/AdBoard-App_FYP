@@ -15,17 +15,20 @@ import 'package:adboard/screens/form_screens/post_ad.dart';
 import 'package:adboard/screens/auth_screens/account.dart';
 import 'package:adboard/screens/payment_screens/advertiser_payments.dart';
 import 'package:adboard/screens/admin/withdrawal_requests.dart';
+import 'package:flutter_stripe/flutter_stripe.dart';
+import 'const/keys.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  Stripe.publishableKey = publishableKey;
+  await Stripe.instance.applySettings();
   await Firebase.initializeApp();
-  await PaymentService.initialize();
   BookingService.startExpiryCheck();
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key });
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +57,7 @@ class MyApp extends StatelessWidget {
         '/post-ad': (context) => const PostAdScreen(),
         '/account': (context) => const AccountScreen(),
         '/payments': (context) => const AdvertiserPaymentsScreen(),
-        '/test-payment': (context) => const TestPaymentScreen(),
+        // '/test-payment': (context) => const TestPaymentScreen(),
         '/admin/withdrawals': (context) => const WithdrawalRequestsScreen(),
       },
     );

@@ -1,15 +1,20 @@
 import 'package:adboard/modals/payment_model.dart';
 import 'package:adboard/modals/withdrawal_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:easypaisa_flutter/easypaisa_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:flutter_stripe/flutter_stripe.dart';
+
+import '../const/keys.dart';
 
 class PaymentService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   static bool _isInitialized = false;
+  static String secretKey = stripeSecretKey; // Replace with your Stripe secret key
 
   // Test credentials for Easypaisa sandbox
   static const String _testStoreId =
@@ -18,24 +23,6 @@ class PaymentService {
       'TEST_HASH_KEY'; // Replace with your test hash key
   static const String _testAccountNum = '03123456789';
 
-  // Initialize Easypaisa
-  static Future<void> initialize() async {
-    if (!_isInitialized) {
-      try {
-        EasypaisaFlutter.initialize(
-          _testStoreId,
-          _testHashKey,
-          _testAccountNum,
-          true, // Always use test account in development
-          AccountType.MA,
-        );
-        _isInitialized = true;
-      } catch (e) {
-        print('Error initializing Easypaisa: $e');
-        rethrow;
-      }
-    }
-  }
 
   // Create a new payment record
   Future<PaymentModel> createPayment({
@@ -47,92 +34,167 @@ class PaymentService {
       final userId = _auth.currentUser?.uid;
       if (userId == null) throw 'User not authenticated';
 
-      final paymentDoc = await _firestore.collection('payments').add({
+      // Create a new document reference to get the ID
+      final paymentRef = _firestore.collection('payments').doc();
+      final paymentId = paymentRef.id;
+
+      // Create the payment document with the generated ID
+      await paymentRef.set({
+        'id': paymentId, // Save the ID in the document
         'adId': adId,
-        'userId': userId,
-        'advertiserUserId': advertiserUserId,
+        'userId': advertiserUserId,
+        'advertiserUserId': userId,
         'amount': amount,
         'status': 'pending',
         'transactionId': '',
         'createdAt': DateTime.now().toIso8601String(),
-        'dueDate':
-            DateTime.now().add(const Duration(days: 7)).toIso8601String(),
+        'dueDate': DateTime.now().add(const Duration(days: 7)).toIso8601String(),
       });
 
-      return PaymentModel.fromFirestore(await paymentDoc.get());
+      return PaymentModel.fromFirestore(await paymentRef.get());
     } catch (e) {
       print('Error creating payment: $e');
       rethrow;
     }
   }
 
-  // Process payment using Easypaisa
+  // Process payment using Stripe
   Future<bool> processPayment({
-    required String accountNumber,
-    required String email,
     required double amount,
-    required String paymentId,
+    required PaymentModel payment,
   }) async {
     try {
-      if (!_isInitialized) {
-        await initialize();
-      }
+      print('Processing payment for amount: $amount');
+      // Convert amount to paisa (multiply by 100) and then to string
+      final amountInPaisa = (amount * 100 ).round().toString();
+      await paymentSheetInitialization(amountInPaisa, 'pkr');
 
-      // Get payment details to find advertiser
-      final payment = await getPayment(paymentId);
-      if (payment == null) throw 'Payment not found';
+      // Update payment status
+      await _firestore.collection('payments').doc(payment.id).update({
+        'status': 'done',
+        'transactionId': DateTime.now().millisecondsSinceEpoch.toString(),
+      });
 
-      // Generate order ID
-      final orderId = 'ORDER_${DateTime.now().millisecondsSinceEpoch}';
-      final expiryDate = DateTime.now()
-          .add(const Duration(days: 1))
-          .toString()
-          .split(' ')[0]
-          .replaceAll('-', '');
+      // Update advertiser balance (we'll deduct our commission here - 10%)
+      final commission = amount * 0.10;
+      final advertiserAmount = amount - commission;
+      await updateAdvertiserBalance(payment.advertiserUserId, advertiserAmount);
 
-      // Construct Easypaisa payment URL for sandbox environment
-      final paymentUrl =
-          Uri.parse('https://sandbox.easypay.easypaisa.com.pk/easypay/Index.jsf'
-              '?storeId=${_testStoreId}'
-              '&orderId=$orderId'
-              '&transactionAmount=${amount.toStringAsFixed(2)}'
-              '&mobileAccountNo=$accountNumber'
-              '&emailAddress=$email'
-              '&transactionType=MWALLET'
-              '&tokenExpiry=$expiryDate'
-              '&merchantPaymentMethod=MWALLET'
-              '&postBackURL=adboard://payment-callback'
-              '&paymentMethod=InitialRequest');
+      // Update booking status to Approved after successful payment
+      final bookingSnapshot = await _firestore
+          .collection('booking')
+          .doc(payment.advertiserUserId)
+          .collection('user-book-ads')
+          .where('adId', isEqualTo: payment.adId)
+          .where('userId', isEqualTo: payment.userId)
+          .get();
 
-      print('Launching payment URL: $paymentUrl'); // Debug log
+      if (bookingSnapshot.docs.isNotEmpty) {
+        final bookingDoc = bookingSnapshot.docs.first;
+        await bookingDoc.reference.update({'status': 'Approved'});
 
-      // Launch Easypaisa payment URL
-      if (await canLaunchUrl(paymentUrl)) {
-        await launchUrl(
-          paymentUrl,
-          mode: LaunchMode.externalApplication,
-        );
-
-        // Update payment status
-        await _firestore.collection('payments').doc(paymentId).update({
-          'status': 'processing',
-          'transactionId': orderId,
+        // Update ad availability
+        await _firestore
+            .collection('ads')
+            .doc(payment.advertiserUserId)
+            .collection('userPosts')
+            .doc(payment.adId)
+            .update({
+          'availability': false,
+          'paymentPending': false,
         });
 
-        // Update advertiser balance (we'll deduct our commission here - 10%)
-        final commission = amount * 0.10;
-        final advertiserAmount = amount - commission;
-        await updateAdvertiserBalance(
-            payment.advertiserUserId, advertiserAmount);
-
-        return true;
-      } else {
-        print('Could not launch Easypaisa payment URL');
-        return false;
+        // Create a notification for successful payment and booking approval
+        await _firestore.collection('notifications').add({
+          'userId': payment.userId,
+          'title': 'Payment Successful',
+          'message': 'Your payment has been processed and your booking is now approved.',
+          'type': 'payment_success',
+          'timestamp': DateTime.now().toIso8601String(),
+          'read': false,
+        });
       }
+
+      return true;
     } catch (e) {
       print('Error processing payment: $e');
       return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> makeIntentPayment(String chargedAmount, String currency) async {
+    try {
+      // chargedAmount is already in paisa as a string
+      print('Amount in paisa: $chargedAmount');
+      Map<String, dynamic> paymentSheetParameters = {
+        "amount": chargedAmount,
+        "currency": currency.toLowerCase(), // Stripe expects lowercase currency code
+        "payment_method_types[]": "card",
+      };
+      
+      var responseStripeAPI = await http.post(
+        Uri.parse("https://api.stripe.com/v1/payment_intents"),
+        body: paymentSheetParameters,
+        headers: {
+          "Authorization": "Bearer $secretKey",
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      );
+      
+      if (responseStripeAPI.statusCode == 200) {
+        return jsonDecode(responseStripeAPI.body);
+      } else {
+        print('Failed with status: ${responseStripeAPI.statusCode}');
+        print('Response body: ${responseStripeAPI.body}');
+        return null;
+      }
+    } catch (errorMsg) {
+      if (kDebugMode) {
+        print(errorMsg);
+      }
+      print(errorMsg.toString());
+      return null;
+    }
+  }
+
+  Future<void> paymentSheetInitialization(String chargedAmount, String currency) async {
+    try {
+      final intentPaymentData = await makeIntentPayment(chargedAmount, currency);
+      if (intentPaymentData == null) throw 'Failed to create payment intent';
+
+      await Stripe.instance.initPaymentSheet(
+        paymentSheetParameters: SetupPaymentSheetParameters(
+          allowsDelayedPaymentMethods: true,
+          paymentIntentClientSecret: intentPaymentData['client_secret'],
+          style: ThemeMode.dark,
+          merchantDisplayName: 'AdBoard',
+        )
+      );
+
+      await showPaymentSheet();
+    } catch (errorMsg, e) {
+      if (kDebugMode) {
+        print(e);
+      }
+      print(errorMsg.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> showPaymentSheet() async {
+    try {
+      await Stripe.instance.presentPaymentSheet();
+    } on StripeException catch (error) {
+      if (kDebugMode) {
+        print(error);
+      }
+      rethrow;
+    } catch (errorMsg, e) {
+      if (kDebugMode) {
+        print(e);
+      }
+      print(errorMsg.toString());
+      rethrow;
     }
   }
 
@@ -156,11 +218,14 @@ class PaymentService {
       final userId = _auth.currentUser?.uid;
       if (userId == null) return [];
 
+      print('Getting pending payments for user: $userId');
+
       final querySnapshot = await _firestore
           .collection('payments')
           .where('userId', isEqualTo: userId)
           .where('status', isEqualTo: 'pending')
           .get();
+      print('Pending payments: ${querySnapshot.docs.length}');
 
       return querySnapshot.docs
           .map((doc) => PaymentModel.fromFirestore(doc))
@@ -225,8 +290,7 @@ class PaymentService {
   }
 
   // Update advertiser balance when payment is received
-  Future<void> updateAdvertiserBalance(
-      String advertiserUserId, double amount) async {
+  Future<void> updateAdvertiserBalance(String advertiserUserId, double amount) async {
     try {
       final balanceRef =
           _firestore.collection('advertiser_balances').doc(advertiserUserId);
@@ -249,8 +313,7 @@ class PaymentService {
   }
 
   // Request withdrawal
-  Future<WithdrawalModel> requestWithdrawal({
-    required String bankName,
+  Future<WithdrawalModel> requestWithdrawal({required String bankName,
     required String accountName,
     required String accountNumber,
     required double amount,
@@ -307,6 +370,7 @@ class PaymentService {
   Future<List<WithdrawalModel>> getWithdrawalHistory() async {
     try {
       final userId = _auth.currentUser?.uid;
+      print('Getting withdrawal history for user: $userId');
       if (userId == null) return [];
 
       final querySnapshot = await _firestore

@@ -2,12 +2,13 @@ import 'package:adboard/modals/ad_modal.dart';
 import 'package:adboard/screens/home_screens/ad_details.dart';
 import 'package:adboard/screens/home_screens/notification.dart';
 import 'package:adboard/screens/home_screens/search.dart';
-import 'package:adboard/screens/home_screens/all_ads.dart';
-import 'package:adboard/widgets/adcard.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,89 +20,98 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String selectedCategory = 'All';
   String searchQuery = '';
-  late Future<List<AdModel>> ads;
+  Stream<List<AdModel>>? _adsStream;
+  List<AdModel>? _cachedAds;
   final TextEditingController _searchController = TextEditingController();
   bool _hasUnreadNotifications = false;
+  int _unreadNotificationCount = 0;
   bool _showAllAds = false;
+  static const String _cachedAdsKey = 'cached_ads';
+  late SharedPreferences _prefs;
 
   @override
   void initState() {
     super.initState();
-    ads = fetchAds();
+    _initializePrefs();
   }
 
-  // Future<List<AdModel>> fetchAds() async {
-  //   try {
-  //     print('Starting to fetch ads...');
+  Future<void> _initializePrefs() async {
+    _prefs = await SharedPreferences.getInstance();
+    _loadCachedAds();
+    _initializeAdsStream();
+    _checkUnreadNotifications();
+  }
 
-  //     // Query all ads using collectionGroup without ordering
-  //     QuerySnapshot snapshot =
-  //         await FirebaseFirestore.instance.collectionGroup('userPosts').get();
+  void _loadCachedAds() {
+    final cachedAdsJson = _prefs.getString(_cachedAdsKey);
+    if (cachedAdsJson != null) {
+      try {
+        final List<dynamic> decodedAds = jsonDecode(cachedAdsJson);
+        _cachedAds = decodedAds.map((ad) => AdModel.fromJson(ad)).toList();
+        print('Loaded ${_cachedAds!.length} ads from cache');
+      } catch (e) {
+        print('Error loading cached ads: $e');
+        _cachedAds = null;
+      }
+    }
+  }
 
-  //     print('Found ${snapshot.docs.length} ads');
-
-  //     if (snapshot.docs.isEmpty) {
-  //       print('No ads found.');
-  //       return [];
-  //     }
-
-  //     List<AdModel> adsList = [];
-
-  //     for (var doc in snapshot.docs) {
-  //       try {
-  //         print('Processing ad: ${doc.id}');
-  //         final ad = AdModel.fromFirestore(doc);
-  //         print(ad.userId);
-  //         adsList.add(ad);
-  //       } catch (e) {
-  //         print('Error parsing ad document ${doc.id}: $e');
-  //         continue;
-  //       }
-  //     }
-
-  //     // Sort the ads by datePosted manually
-  //     adsList.sort((a, b) => b.datePosted.compareTo(a.datePosted));
-
-  //     print('Successfully parsed ${adsList.length} total ads');
-  //     return adsList;
-  //   } catch (e) {
-  //     print('Error in fetchAds: $e');
-  //     return [];
-  //   }
-  // }
-
-  Future<List<AdModel>> fetchAds() async {
-    print('\n\n\n\n\t\t\t\tFetching ads...2');
+  Future<void> _saveCachedAds(List<AdModel> ads) async {
     try {
-      // Query all documents from userPosts
-      QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collectionGroup('userPosts')
-          .get();
+      final adsJson = jsonEncode(ads.map((ad) => ad.toJson()).toList());
+      await _prefs.setString(_cachedAdsKey, adsJson);
+      print('Saved ${ads.length} ads to cache');
+    } catch (e) {
+      print('Error saving cached ads: $e');
+    }
+  }
 
-      if (snapshot.docs.isEmpty) {
-        print('No ads found.');
-        return [];
+  void _initializeAdsStream() {
+    _adsStream = FirebaseFirestore.instance
+        .collectionGroup('userPosts')
+        .snapshots()
+        .asyncMap((snapshot) async {
+      // Check if we have cached ads and if the data has changed
+      if (_cachedAds != null) {
+        bool hasChanges = false;
+        
+        // Check for changes in existing ads
+        for (var doc in snapshot.docs) {
+          final newAd = AdModel.fromFirestore(doc);
+          final existingAd = _cachedAds!.firstWhere(
+            (ad) => ad.id == newAd.id,
+            orElse: () => newAd,
+          );
+          
+          if (existingAd.toMap().toString() != newAd.toMap().toString()) {
+            hasChanges = true;
+            break;
+          }
+        }
+        
+        // Check for new or deleted ads
+        if (!hasChanges && _cachedAds!.length != snapshot.docs.length) {
+          hasChanges = true;
+        }
+        
+        // If no changes, return cached ads
+        if (!hasChanges) {
+          return _cachedAds!;
+        }
       }
 
+      // Process new data
       List<AdModel> ads = [];
-      
-      // Process each ad
       for (var doc in snapshot.docs) {
         final ad = AdModel.fromFirestore(doc);
         
-        // If ad is marked as unavailable (booked), check if booking has expired
         if (!ad.availability) {
-          // Fetch the latest approved booking for this ad
-          // print(ad.id);
-          // print(ad.userId);
-          // print(ad.availability);
           final bookingSnapshot = await FirebaseFirestore.instance
               .collectionGroup('user-book-ads')
               .where('adId', isEqualTo: ad.id)
               .where('status', isEqualTo: 'Approved')
               .limit(1)
               .get();
-          // print(bookingSnapshot.docs.length);
 
           if (bookingSnapshot.docs.isNotEmpty) {
             final bookingData = bookingSnapshot.docs.first.data();
@@ -109,13 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
             final durationDays = int.parse(bookingData['durationDays']);
             final bookingEndDate = bookingTimestamp.add(Duration(days: durationDays));
 
-            // print('Checking ad: ${ad.title}');
-            // print('Booking end date: $bookingEndDate');
-            // print('Current date: ${DateTime.now()}');
-
-            // If booking has expired, update ad availability
             if (DateTime.now().isAfter(bookingEndDate)) {
-              print('Booking expired for ad: ${ad.title}');
               await FirebaseFirestore.instance
                   .collection('ads')
                   .doc(ad.userId)
@@ -123,7 +127,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   .doc(ad.id)
                   .update({'availability': true});
                   
-              // Update the ad object to reflect the new availability
               final updatedDoc = await FirebaseFirestore.instance
                   .collection('ads')
                   .doc(ad.userId)
@@ -136,8 +139,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ads.add(ad);
             }
           } else {
-            // No approved booking found, mark as available
-            print('No approved booking found for ad: ${ad.title}');
             await FirebaseFirestore.instance
                 .collection('ads')
                 .doc(ad.userId)
@@ -145,7 +146,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 .doc(ad.id)
                 .update({'availability': true});
                 
-            // Add updated ad
             final updatedDoc = await FirebaseFirestore.instance
                 .collection('ads')
                 .doc(ad.userId)
@@ -156,16 +156,41 @@ class _HomeScreenState extends State<HomeScreen> {
             ads.add(AdModel.fromFirestore(updatedDoc));
           }
         } else {
-          // Ad is already available, just add it to the list
           ads.add(ad);
         }
       }
-
-      print('Processed ${ads.length} ads.');
+      
+      // Update cache
+      _cachedAds = ads;
+      _saveCachedAds(ads);
       return ads;
+    });
+  }
+
+  Future<void> _checkUnreadNotifications() async {
+    try {
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+      if (userId == null) return;
+
+      // Get bookings where user is the owner
+      final ownerBookings = await FirebaseFirestore.instance
+          .collection('booking')
+          .doc(userId)
+          .collection('user-book-ads')
+          .get();
+
+      // Get bookings where user is the booker
+      final bookerBookings = await FirebaseFirestore.instance
+          .collectionGroup('user-book-ads')
+          .where('userId', isEqualTo: userId)
+          .get();
+
+      setState(() {
+        _unreadNotificationCount = ownerBookings.docs.length + bookerBookings.docs.length;
+        _hasUnreadNotifications = _unreadNotificationCount > 0;
+      });
     } catch (e) {
-      print('Error fetching ads: $e');
-      return [];
+      print('Error checking bookings: $e');
     }
   }
 
@@ -191,14 +216,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     right: 0,
                     top: 0,
                     child: Container(
-                      padding: const EdgeInsets.all(2),
+                      padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.error,
                         shape: BoxShape.circle,
                       ),
                       constraints: const BoxConstraints(
-                        minWidth: 8,
-                        minHeight: 8,
+                        minWidth: 16,
+                        minHeight: 16,
+                      ),
+                      child: Text(
+                        _unreadNotificationCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
                       ),
                     ),
                   ),
@@ -212,11 +246,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     userId: FirebaseAuth.instance.currentUser!.uid,
                   ),
                 ),
-              ).then((_) {
-                setState(() {
-                  ads = fetchAds();
-                });
-              });
+              );
             },
           ),
           const SizedBox(width: 8),
@@ -224,9 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          setState(() {
-            ads = fetchAds();
-          });
+          _checkUnreadNotifications();
         },
         color: Theme.of(context).primaryColor,
         child: CustomScrollView(
@@ -263,8 +291,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         onSubmitted: (value) async {
                           if (value.isNotEmpty) {
-                            // Fetch ads before navigating to search
-                            final adsList = await ads;
+                            // Get current ads from stream
+                            final adsList = await _adsStream?.first ?? [];
                             if (mounted) {
                               Navigator.push(
                                 context,
@@ -332,8 +360,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             // Ads Grid
-            FutureBuilder<List<AdModel>>(
-              future: ads,
+            StreamBuilder<List<AdModel>>(
+              stream: _adsStream,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const SliverFillRemaining(
@@ -363,9 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 8),
                           TextButton(
                             onPressed: () {
-                              setState(() {
-                                ads = fetchAds();
-                              });
+                              _initializeAdsStream();
                             },
                             child: const Text('Retry'),
                           ),

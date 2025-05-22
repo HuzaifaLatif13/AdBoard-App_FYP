@@ -96,6 +96,14 @@ class AdModel {
       userId: map['userId'],
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return toMap();
+  }
+
+  factory AdModel.fromJson(Map<String, dynamic> json) {
+    return AdModel.fromMap(json);
+  }
 }
 
 class Booking {
@@ -108,6 +116,7 @@ class Booking {
   final String userEmail;
   final String userContact;
   final String durationDays;
+  final String amount;
   final String specialInstructions;
   final String adDesignUrl;
   final String bookingTimestamp;
@@ -123,6 +132,7 @@ class Booking {
     required this.userEmail,
     required this.userContact,
     required this.durationDays,
+    required this.amount,
     required this.specialInstructions,
     required this.adDesignUrl,
     required this.bookingTimestamp,
@@ -141,6 +151,7 @@ class Booking {
       userEmail: map['userEmail'] ?? '',
       userContact: map['userContact'] ?? '',
       durationDays: map['durationDays'] ?? '',
+      amount: map['amount'] ?? '',
       specialInstructions: map['specialInstructions'] ?? '',
       adDesignUrl: map['adDesignUrl'] ?? '',
       bookingTimestamp: map['bookingTimestamp'] ?? '',
@@ -160,6 +171,7 @@ class Booking {
       'userEmail': userEmail,
       'userContact': userContact,
       'durationDays': durationDays,
+      'amount': amount,
       'specialInstructions': specialInstructions,
       'adDesignUrl': adDesignUrl,
       'bookingTimestamp': bookingTimestamp,

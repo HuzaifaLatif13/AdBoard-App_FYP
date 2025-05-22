@@ -27,6 +27,7 @@ class _AdvertiserPaymentsScreenState extends State<AdvertiserPaymentsScreen> {
   double _currentBalance = 0.0;
   List<WithdrawalModel> _withdrawals = [];
   bool _isLoading = true;
+  bool _isWithdrawalLoading = false;
 
   @override
   void initState() {
@@ -55,204 +56,223 @@ class _AdvertiserPaymentsScreenState extends State<AdvertiserPaymentsScreen> {
   }
 
   Future<void> _showWithdrawalDialog() async {
-    // Reset controllers
+    // Reset controllers and loading state
     _bankNameController.clear();
     _accountNameController.clear();
     _accountNumberController.clear();
     _amountController.clear();
+    setState(() => _isWithdrawalLoading = false);
 
     return showDialog(
       context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Request Withdrawal',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Request Withdrawal',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
+                    const SizedBox(height: 24),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.account_balance_wallet,
+                              color: Colors.blue),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Available Balance',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.blue,
+                                ),
+                              ),
+                              Text(
+                                'Rs. ${_currentBalance.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blue,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
+                    const SizedBox(height: 24),
+                    TextFormField(
+                      controller: _bankNameController,
+                      decoration: InputDecoration(
+                        labelText: 'Bank Name',
+                        prefixIcon: const Icon(Icons.account_balance),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      validator: (value) => value?.isEmpty ?? true
+                          ? 'Please enter bank name'
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _accountNameController,
+                      decoration: InputDecoration(
+                        labelText: 'Account Name',
+                        prefixIcon: const Icon(Icons.person),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      validator: (value) => value?.isEmpty ?? true
+                          ? 'Please enter account name'
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _accountNumberController,
+                      decoration: InputDecoration(
+                        labelText: 'Account Number',
+                        prefixIcon: const Icon(Icons.credit_card),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      validator: (value) => value?.isEmpty ?? true
+                          ? 'Please enter account number'
+                          : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _amountController,
+                      decoration: InputDecoration(
+                        labelText: 'Amount',
+                        prefixIcon: const Icon(Icons.local_parking_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      keyboardType: TextInputType.number,
+                      validator: (value) {
+                        if (value?.isEmpty ?? true) return 'Please enter amount';
+                        final amount = double.tryParse(value!);
+                        if (amount == null) return 'Invalid amount';
+                        if (amount <= 0) return 'Amount must be greater than 0';
+                        if (amount > _currentBalance) {
+                          return 'Amount exceeds available balance';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
                       children: [
-                        const Icon(Icons.account_balance_wallet,
-                            color: Colors.blue),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Available Balance',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.blue,
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isWithdrawalLoading
+                                ? null
+                                : () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                            Text(
-                              'Rs. ${_currentBalance.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.blue,
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _isWithdrawalLoading
+                                ? null
+                                : () async {
+                                    if (!(_formKey.currentState?.validate() ?? false)) return;
+                                    
+                                    setDialogState(() => _isWithdrawalLoading = true);
+                                    try {
+                                      await _paymentService.requestWithdrawal(
+                                        bankName: _bankNameController.text,
+                                        accountName: _accountNameController.text,
+                                        accountNumber: _accountNumberController.text,
+                                        amount: double.parse(_amountController.text),
+                                      );
+
+                                      // Close the dialog first
+                                      Navigator.pop(context);
+
+                                      // Only show notification if the widget is still mounted
+                                      if (mounted) {
+                                        _notificationService.showSuccessNotification(
+                                          context,
+                                          message: 'Withdrawal Request Submitted',
+                                          subtitle: 'Your request will be processed within 24-48 hours',
+                                        );
+                                        _loadData();
+                                      }
+                                    } catch (e) {
+                                      if (mounted) {
+                                        _notificationService.showErrorNotification(
+                                          context,
+                                          message: 'Error requesting withdrawal',
+                                          subtitle: e.toString(),
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setDialogState(() => _isWithdrawalLoading = false);
+                                      }
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
                               ),
                             ),
-                          ],
+                            child: _isWithdrawalLoading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                    ),
+                                  )
+                                : const Text('Submit'),
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    controller: _bankNameController,
-                    decoration: InputDecoration(
-                      labelText: 'Bank Name',
-                      prefixIcon: const Icon(Icons.account_balance),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    validator: (value) => value?.isEmpty ?? true
-                        ? 'Please enter bank name'
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _accountNameController,
-                    decoration: InputDecoration(
-                      labelText: 'Account Name',
-                      prefixIcon: const Icon(Icons.person),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    validator: (value) => value?.isEmpty ?? true
-                        ? 'Please enter account name'
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _accountNumberController,
-                    decoration: InputDecoration(
-                      labelText: 'Account Number',
-                      prefixIcon: const Icon(Icons.credit_card),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    validator: (value) => value?.isEmpty ?? true
-                        ? 'Please enter account number'
-                        : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _amountController,
-                    decoration: InputDecoration(
-                      labelText: 'Amount',
-                      prefixIcon: const Icon(Icons.attach_money),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value?.isEmpty ?? true) return 'Please enter amount';
-                      final amount = double.tryParse(value!);
-                      if (amount == null) return 'Invalid amount';
-                      if (amount <= 0) return 'Amount must be greater than 0';
-                      if (amount > _currentBalance) {
-                        return 'Amount exceeds available balance';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => _requestWithdrawal(context),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                          child: const Text('Submit'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
     );
-  }
-
-  Future<void> _requestWithdrawal(BuildContext dialogContext) async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-
-    try {
-      await _paymentService.requestWithdrawal(
-        bankName: _bankNameController.text,
-        accountName: _accountNameController.text,
-        accountNumber: _accountNumberController.text,
-        amount: double.parse(_amountController.text),
-      );
-
-      // Close the dialog first
-      Navigator.pop(dialogContext);
-
-      // Only show notification if the widget is still mounted
-      if (mounted) {
-        _notificationService.showSuccessNotification(
-          context,
-          message: 'Withdrawal Request Submitted',
-          subtitle: 'Your request will be processed within 24-48 hours',
-        );
-        _loadData();
-      }
-    } catch (e) {
-      if (mounted) {
-        _notificationService.showErrorNotification(
-          context,
-          message: 'Error requesting withdrawal',
-          subtitle: e.toString(),
-        );
-      }
-    }
   }
 
   Future<void> _addTestBalance() async {
